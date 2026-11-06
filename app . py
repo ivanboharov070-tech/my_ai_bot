@@ -1,0 +1,79 @@
+import os
+import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from groq import AsyncGroq
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# --- Мини веб-сервер для Render (чтобы Render думал, что это сайт) ---
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+# ---------------------------------------------------------------------
+
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
+client = AsyncGroq(api_key=GROQ_API_KEY)
+
+SYSTEM_PROMPT = "Ты — Ваня, живой, общительный парень. Твоя задача — общаться на любые темы, как обычный человек в Телеграме. Твой стиль: расслабленный, используй сленг, короткие предложения. Обязательно используй эмодзи (😂, 😎, 😂, 🔥). Никогда не признавайся, что ты ИИ или бот. Отвечай коротко, как реальный парень с телефона."
+
+user_histories = {}
+
+@dp.message(Command("reset"))
+async def reset_history(message: types.Message):
+    chat_id = message.chat.id
+    user_histories[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    await message.reply("История диалога очищена. Начинаем заново!")
+
+@dp.message()
+async def handle_message(message: types.Message):
+    if not message.text:
+        return
+    chat_id = message.chat.id
+    user_text = message.text.strip()
+
+    if chat_id not in user_histories:
+        user_histories[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    user_histories[chat_id].append({"role": "user", "content": user_text})
+
+    try:
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=user_histories[chat_id],
+            temperature=0.8,
+            max_tokens=300,
+        )
+        ai_reply = response.choices[0].message.content.strip()
+        user_histories[chat_id].append({"role": "assistant", "content": ai_reply})
+
+        if len(user_histories[chat_id]) > 20:
+            user_histories[chat_id] = [user_histories[chat_id][0]] + user_histories[chat_id][-19:]
+
+        await message.reply(ai_reply)
+    except Exception as e:
+        print(f"Error: {e}")
+
+async def main():
+    print("Бот запущен!")
+    # Запускаем веб-сервер в фоне
+    threading.Thread(target=run_web_server, daemon=True).start()
+    # Запускаем бота
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
