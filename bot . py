@@ -1,5 +1,7 @@
 import os
 import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from groq import AsyncGroq
@@ -9,6 +11,19 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# --- Мини веб-сервер для Render (чтобы Render думал, что это сайт) ---
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
+# ---------------------------------------------------------------------
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -55,6 +70,9 @@ async def handle_message(message: types.Message):
 
 async def main():
     print("Бот запущен!")
+    # Запускаем веб-сервер в фоне
+    threading.Thread(target=run_web_server, daemon=True).start()
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
